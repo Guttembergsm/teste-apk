@@ -1,150 +1,93 @@
 package com.example.autochamada
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.app.Service
-import android.content.Context
 import android.content.Intent
-import android.media.AudioManager
-import android.net.Uri
-import android.os.Build
-import android.os.Handler
 import android.os.IBinder
+import android.os.Handler
 import android.os.Looper
-import androidx.core.app.NotificationCompat
+import android.net.Uri
+import android.telephony.PhoneStateListener
+import android.telephony.TelephonyManager
+import android.content.Context
+import android.content.pm.PackageManager
+import android.Manifest
+import android.util.Log
 
 class CallService : Service() {
-
     companion object {
-        const val CHANNEL_ID = "autochamada_channel"
-        const val NOTIFICATION_ID = 101
-
-        const val ACTION_START = "com.example.autochamada.ACTION_START"
-        const val ACTION_STOP = "com.example.autochamada.ACTION_STOP"
-        const val ACTION_STATUS_UPDATE = "com.example.autochamada.ACTION_STATUS_UPDATE"
-
-        const val EXTRA_PHONE = "extra_phone"
-        const val EXTRA_INTERVAL_SEC = "extra_interval_sec"
-        const val EXTRA_MAX_ATTEMPTS = "extra_max_attempts"
-        const val EXTRA_SPEAKER = "extra_speaker"
-        const val EXTRA_STATUS = "extra_status"
-        const val EXTRA_ATTEMPT = "extra_attempt"
+        const val ACTION_START = "com.example.autochamada.START"
+        const val ACTION_STOP = "com.example.autochamada.STOP"
+        private const val TAG = "AutoChamada"
     }
-
     private val handler = Handler(Looper.getMainLooper())
-    private var isRunning = false
-    private var targetPhone: String = ""
-    private var intervalSec: Int = 15
-    private var maxAttempts: Int = 10
-    private var useSpeaker: Boolean = true
-    private var currentAttempt: Int = 0
-
-    private val callRunnable = object : Runnable {
-        override fun run() {
-            if (!isRunning) return
-
-            if (currentAttempt >= maxAttempts) {
-                broadcastStatus("Concluído (limite atingido)", currentAttempt, maxAttempts)
-                stopSelf()
-                return
+    private lateinit var telephony: TelephonyManager
+    private var number = ""
+    private var running = false
+    private var callWasActive = false
+    private var lastState = TelephonyManager.CALL_STATE_IDLE
+    private val retry = Runnable { if (running) makeCall() }
+    private val listener = object : PhoneStateListener() {
+        override fun onCallStateChanged(state: Int, phoneNumber: String?) {
+            if (state != TelephonyManager.CALL_STATE_IDLE) {
+                callWasActive = true
+                handler.removeCallbacks(retry)
+            } else if (callWasActive && running) {
+                callWasActive = false
+                handler.removeCallbacks(retry)
+                handler.postDelayed(retry, 3000)
             }
-
-            currentAttempt++
-            placePhoneCall(targetPhone)
-            broadcastStatus("Discando para $targetPhone", currentAttempt, maxAttempts)
-
-            handler.postDelayed(this, (intervalSec + 45) * 1000L)
+            lastState = state
         }
     }
 
     override fun onCreate() {
         super.onCreate()
-        createNotificationChannel()
+        telephony = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+        try {
+            telephony.listen(listener, PhoneStateListener.LISTEN_CALL_STATE)
+        } catch (e: SecurityException) { Log.e(TAG, "Permissão de estado de chamada ausente", e) }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> {
-                targetPhone = intent.getStringExtra(EXTRA_PHONE) ?: ""
-                intervalSec = intent.getIntExtra(EXTRA_INTERVAL_SEC, 15)
-                maxAttempts = intent.getIntExtra(EXTRA_MAX_ATTEMPTS, 10)
-                useSpeaker = intent.getBooleanExtra(EXTRA_SPEAKER, true)
-                currentAttempt = 0
-                isRunning = true
-
-                startForeground(NOTIFICATION_ID, buildNotification("Discagem ativa para $targetPhone"))
-                handler.removeCallbacks(callRunnable)
-                handler.post(callRunnable)
+                number = intent.getStringExtra("number") ?: ""
+                running = true
+                callWasActive = false
+                handler.removeCallbacks(retry)
+                makeCall()
             }
             ACTION_STOP -> {
-                isRunning = false
-                handler.removeCallbacks(callRunnable)
-                broadcastStatus("Serviço parado", currentAttempt, maxAttempts)
-                stopForeground(STOP_FOREGROUND_REMOVE)
+                running = false
+                handler.removeCallbacks(retry)
                 stopSelf()
             }
         }
         return START_NOT_STICKY
     }
 
-    private fun placePhoneCall(phone: String) {
+    private fun makeCall() {
+        if (!running || number.isBlank()) return
+        if (checkSelfPermission(Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
+            running = false; stopSelf(); return
+        }
         try {
-            val callIntent = Intent(Intent.ACTION_CALL).apply {
-                data = Uri.parse("tel:${Uri.encode(phone)}")
+            val intent = Intent(Intent.ACTION_CALL, Uri.parse("tel:${Uri.encode(number)}")).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            startActivity(callIntent)
-
-            if (useSpeaker) {
-                handler.postDelayed({
-                    val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-                    audioManager.mode = AudioManager.MODE_IN_CALL
-                    @Suppress("DEPRECATION")
-                    audioManager.isSpeakerphoneOn = true
-                }, 1500L)
-            }
-        } catch (e: SecurityException) {
-            broadcastStatus("Erro de permissão CALL_PHONE", currentAttempt, maxAttempts)
-        }
-    }
-
-    private fun broadcastStatus(status: String, attempt: Int, max: Int) {
-        val update = Intent(ACTION_STATUS_UPDATE).apply {
-            setPackage(packageName)
-            putExtra(EXTRA_STATUS, status)
-            putExtra(EXTRA_ATTEMPT, attempt)
-            putExtra(EXTRA_MAX_ATTEMPTS, max)
-        }
-        sendBroadcast(update)
-    }
-
-    private fun buildNotification(content: String): Notification {
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("AutoChamada")
-            .setContentText(content)
-            .setSmallIcon(android.R.drawable.sym_action_call)
-            .setOngoing(true)
-            .build()
-    }
-
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "Serviço AutoChamada",
-                NotificationManager.IMPORTANCE_LOW
-            )
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(channel)
+            startActivity(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Não foi possível iniciar a chamada", e)
+            handler.removeCallbacks(retry)
+            handler.postDelayed(retry, 3000)
         }
     }
 
     override fun onDestroy() {
-        isRunning = false
-        handler.removeCallbacks(callRunnable)
+        running = false
+        handler.removeCallbacks(retry)
+        try { telephony.listen(listener, PhoneStateListener.LISTEN_NONE) } catch (_: Exception) {}
         super.onDestroy()
     }
-
     override fun onBind(intent: Intent?): IBinder? = null
 }

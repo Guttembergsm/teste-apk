@@ -1,173 +1,128 @@
 package com.example.autochamada
 
 import android.Manifest
-import android.content.BroadcastReceiver
-import android.content.Context
+import android.app.Activity
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.text.InputType
-import android.view.Gravity
 import android.widget.*
-import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
+import android.graphics.Color
+import android.view.Gravity
+import android.view.ViewGroup
+import android.text.InputType
 
-class MainActivity : AppCompatActivity() {
-
-    private lateinit var phoneInput: EditText
-    private lateinit var intervalInput: EditText
-    private lateinit var retriesInput: EditText
-    private lateinit var speakerSwitch: Switch
-    private lateinit var statusText: TextView
-    private lateinit var startButton: Button
-    private lateinit var stopButton: Button
-
-    private val statusReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            val status = intent?.getStringExtra(CallService.EXTRA_STATUS) ?: return
-            val attempt = intent.getIntExtra(CallService.EXTRA_ATTEMPT, 0)
-            val max = intent.getIntExtra(CallService.EXTRA_MAX_ATTEMPTS, 0)
-            statusText.text = if (max > 0) "Status: $status (Tentativa $attempt/$max)" else "Status: $status"
-        }
-    }
+class MainActivity : Activity() {
+    private val prefs by lazy { getSharedPreferences("config", MODE_PRIVATE) }
+    private val blue = Color.rgb(22,119,242)
+    private val dark = Color.rgb(7,20,38)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        showHome()
+        requestNeededPermissions()
+    }
 
-        val rootLayout = LinearLayout(this).apply {
+    private fun requestNeededPermissions() {
+        val needed = mutableListOf(Manifest.permission.CALL_PHONE, Manifest.permission.READ_PHONE_STATE)
+        if (Build.VERSION.SDK_INT >= 33) needed.add(Manifest.permission.POST_NOTIFICATIONS)
+        val missing = needed.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), 10)
+    }
+
+    private fun baseLayout(): LinearLayout {
+        return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(48, 64, 48, 48)
-            gravity = Gravity.TOP
+            gravity = Gravity.CENTER
+            setPadding(28, 24, 28, 24)
+            setBackgroundColor(dark)
+        }
+    }
+
+    private fun button(label: String, color: Int, action: () -> Unit): Button =
+        Button(this).apply {
+            text = label; setTextColor(Color.WHITE); setBackgroundTintList(android.content.res.ColorStateList.valueOf(color))
+            textSize = 18f
+            setOnClickListener { action() }
         }
 
-        val titleView = TextView(this).apply {
-            text = "AutoChamada"
-            textSize = 24f
-            setPadding(0, 0, 0, 24)
+    private fun showHome() {
+        val root = baseLayout()
+        val settings = TextView(this).apply {
+            text = "⚙"; textSize = 30f; setTextColor(Color.WHITE); gravity = Gravity.END
+            setOnClickListener { adminLogin() }
         }
+        root.addView(settings, LinearLayout.LayoutParams(-1, 60))
+        root.addView(TextView(this).apply {
+            text = "AUTOCHAMADA"; textSize = 23f; setTextColor(Color.WHITE); gravity = Gravity.CENTER
+        }, LinearLayout.LayoutParams(-1, 70))
+        root.addView(button("☎  CHAMAR", Color.rgb(13,166,91)) {
+            val number = prefs.getString("number", "")?.trim().orEmpty()
+            if (number.isBlank()) {
+                Toast.makeText(this, "O administrador ainda não configurou o número.", Toast.LENGTH_LONG).show()
+            } else if (checkSelfPermission(Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED ||
+                checkSelfPermission(Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
+                requestNeededPermissions()
+                Toast.makeText(this, "Conceda as permissões solicitadas e tente novamente.", Toast.LENGTH_LONG).show()
+            } else {
+                startService(Intent(this, CallService::class.java).setAction(CallService.ACTION_START).putExtra("number", number))
+                Toast.makeText(this, "Ciclo de chamadas iniciado.", Toast.LENGTH_SHORT).show()
+            }
+        }, LinearLayout.LayoutParams(-1, 72).apply { bottomMargin = 22 })
+        root.addView(button("☎  DESLIGAR / PARAR", Color.rgb(220,45,65)) {
+            startService(Intent(this, CallService::class.java).setAction(CallService.ACTION_STOP))
+            Toast.makeText(this, "Novas tentativas canceladas.", Toast.LENGTH_SHORT).show()
+        }, LinearLayout.LayoutParams(-1, 72))
+        setContentView(root)
+    }
 
-        phoneInput = EditText(this).apply {
-            hint = "Número de telefone (ex: 11999999999)"
+    private fun adminLogin() {
+        val input = EditText(this).apply { hint = "Senha do administrador"; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }
+        LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(24, 8, 24, 8)
+            addView(input)
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Acesso administrativo")
+            .setMessage("Digite a senha de administrador.")
+            .setView(input)
+            .setNegativeButton("Cancelar", null)
+            .setPositiveButton("Entrar") { _, _ ->
+                val stored = prefs.getString("admin_password", "1234")
+                if (input.text.toString() == stored) showAdmin()
+                else Toast.makeText(this, "Senha incorreta.", Toast.LENGTH_SHORT).show()
+            }.show()
+    }
+
+    private fun showAdmin() {
+        val number = EditText(this).apply {
+            hint = "Número com DDD (ex.: 11987654321)"
             inputType = InputType.TYPE_CLASS_PHONE
-            setText("")
+            setText(prefs.getString("number", ""))
         }
-
-        intervalInput = EditText(this).apply {
-            hint = "Intervalo entre chamadas (segundos)"
-            inputType = InputType.TYPE_CLASS_NUMBER
-            setText("15")
+        val password = EditText(this).apply {
+            hint = "Nova senha (deixe vazio para manter)"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
-
-        retriesInput = EditText(this).apply {
-            hint = "Máximo de tentativas"
-            inputType = InputType.TYPE_CLASS_NUMBER
-            setText("10")
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(24, 8, 24, 8)
+            addView(TextView(this@MainActivity).apply { text = "Número de destino"; textSize = 16f })
+            addView(number)
+            addView(TextView(this@MainActivity).apply { text = "Alterar senha administrativa (opcional)"; textSize = 16f })
+            addView(password)
         }
-
-        speakerSwitch = Switch(this).apply {
-            text = "Ativar viva-voz automaticamente"
-            isChecked = true
-            setPadding(0, 16, 0, 24)
-        }
-
-        statusText = TextView(this).apply {
-            text = "Status: Aguardando início"
-            textSize = 16f
-            setPadding(0, 16, 0, 32)
-        }
-
-        startButton = Button(this).apply {
-            text = "Iniciar AutoChamada"
-            setOnClickListener { checkPermissionsAndStart() }
-        }
-
-        stopButton = Button(this).apply {
-            text = "Parar Serviço"
-            setOnClickListener { stopCallService() }
-        }
-
-        rootLayout.addView(titleView)
-        rootLayout.addView(phoneInput)
-        rootLayout.addView(intervalInput)
-        rootLayout.addView(retriesInput)
-        rootLayout.addView(speakerSwitch)
-        rootLayout.addView(statusText)
-        rootLayout.addView(startButton)
-        rootLayout.addView(stopButton)
-
-        setContentView(rootLayout)
-    }
-
-    private fun checkPermissionsAndStart() {
-        val requiredPermissions = mutableListOf(
-            Manifest.permission.CALL_PHONE,
-            Manifest.permission.READ_PHONE_STATE
-        )
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            requiredPermissions.add(Manifest.permission.POST_NOTIFICATIONS)
-        }
-
-        val missing = requiredPermissions.filter {
-            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-        }
-
-        if (missing.isNotEmpty()) {
-            ActivityCompat.requestPermissions(this, missing.toTypedArray(), 1001)
-            return
-        }
-
-        startCallService()
-    }
-
-    private fun startCallService() {
-        val phone = phoneInput.text.toString().trim()
-        if (phone.isEmpty()) {
-            Toast.makeText(this, "Informe um número válido", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        val intervalSec = intervalInput.text.toString().toIntOrNull() ?: 15
-        val maxRetries = retriesInput.text.toString().toIntOrNull() ?: 10
-
-        val serviceIntent = Intent(this, CallService::class.java).apply {
-            action = CallService.ACTION_START
-            putExtra(CallService.EXTRA_PHONE, phone)
-            putExtra(CallService.EXTRA_INTERVAL_SEC, intervalSec)
-            putExtra(CallService.EXTRA_MAX_ATTEMPTS, maxRetries)
-            putExtra(CallService.EXTRA_SPEAKER, speakerSwitch.isChecked)
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent)
-        } else {
-            startService(serviceIntent)
-        }
-        statusText.text = "Status: Serviço iniciado para $phone"
-    }
-
-    private fun stopCallService() {
-        val stopIntent = Intent(this, CallService::class.java).apply {
-            action = CallService.ACTION_STOP
-        }
-        startService(stopIntent)
-        statusText.text = "Status: Ciclo interrompido pelo usuário"
-    }
-
-    override fun onResume() {
-        super.onResume()
-        val filter = IntentFilter(CallService.ACTION_STATUS_UPDATE)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(statusReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(statusReceiver, filter)
-        }
-    }
-
-    override fun onPause() {
-        super.onPause()
-        unregisterReceiver(statusReceiver)
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Configurações do administrador")
+            .setView(box)
+            .setNegativeButton("Cancelar", null)
+            .setPositiveButton("Salvar") { _, _ ->
+                val n = number.text.toString().trim()
+                if (n.isBlank()) Toast.makeText(this, "Informe um número válido.", Toast.LENGTH_LONG).show()
+                else {
+                    prefs.edit().putString("number", n).apply()
+                    if (password.text.toString().isNotBlank()) prefs.edit().putString("admin_password", password.text.toString()).apply()
+                    Toast.makeText(this, "Configurações salvas.", Toast.LENGTH_SHORT).show()
+                }
+            }.show()
     }
 }

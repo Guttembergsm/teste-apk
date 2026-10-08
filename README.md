@@ -1,18 +1,18 @@
-# AutoChamada (com.example.autochamada)
+# AutoChamada Android (projeto inicial)
 
-Aplicativo Android nativo em Kotlin para automação e rediscagem programada de chamadas telefônicas utilizando `CallService` (Foreground Service) e `MainActivity`.
+Aplicativo Android nativo em Kotlin com:
+- Tela simples com **Chamar**, **Desligar / Parar** e engrenagem.
+- Número de destino configurável na área administrativa.
+- Senha administrativa inicial: **1234** (altere ao primeiro uso).
+- Permissões de chamada e estado telefônico solicitadas em tempo de execução.
+- Tentativa de nova chamada 3 segundos após o sistema reportar que a chamada terminou.
 
-## Como gerar o arquivo `.apk` (Sem instalar nada no PC)
+## Abrir e compilar
+1. Instale o Android Studio.
+2. Abra a pasta `AutoChamadaAndroid` no Android Studio.
+3. Aguarde a sincronização do Gradle.
+4. Conecte um telefone Android físico, aceite as permissões e execute **Run**.
+5. Para gerar APK: **Build > Build APK(s)**.
 
-Este pacote já inclui o workflow **GitHub Actions** (`.github/workflows/build-apk.yml`) pré-configurado:
-
-1. Crie um repositório gratuito no [GitHub](https://github.com/new).
-2. Clique em **uploading an existing file** e arraste todos os arquivos deste pacote (incluindo a pasta `.github`).
-3. Abra a aba **Actions** do seu repositório no GitHub.
-4. Aguarde ~2 minutos até o workflow **Gerar APK Android (AutoChamada)** ficar verde.
-5. Role até a seção **Artifacts** e clique em **AutoChamada-debug-apk** para baixar o seu `.apk` pronto para instalar no celular!
-
-## Como gerar no Android Studio ou Terminal
-
-- **Android Studio**: Abra a pasta do projeto, aguarde o Gradle Sync e clique em **Build > Build Bundle(s) / APK(s) > Build APK(s)**.
-- **Terminal**: Execute `gradle assembleDebug`. O arquivo será salvo em `app/build/outputs/apk/debug/app-debug.apk`.
+## Limitações importantes
+Este é um projeto inicial, não um APK pré-compilado. O Android e alguns fabricantes limitam o início de chamadas e a observação do estado telefônico em segundo plano. O comportamento varia por versão, permissões, SIM e fabricante; teste em aparelho real. Em particular, a API antiga de estado de chamada pode ter diferenças nas versões atuais do Android. A implementação não consegue garantir rediscagem em todos os aparelhos, nem interromper uma chamada já conectada ao tocar em “Desligar / Parar”; esse botão cancela as novas tentativas. Para uma versão de produção, recomenda-se testar e adaptar o serviço em primeiro plano e o tratamento de chamadas à versão Android alvo.
